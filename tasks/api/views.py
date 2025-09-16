@@ -153,6 +153,13 @@ class CommentListCreateView(generics.ListCreateAPIView):
         serializer.save(task=task, author=self.request.user)
 
 
+from rest_framework import generics, permissions
+from rest_framework.exceptions import NotFound, PermissionDenied
+
+from tasks.models import Task, Comment
+from .serializers import CommentSerializer
+
+
 class CommentDetailDestroyView(generics.RetrieveDestroyAPIView):
     """
     GET /api/tasks/{task_id}/comments/{comment_id}/
@@ -167,6 +174,7 @@ class CommentDetailDestroyView(generics.RetrieveDestroyAPIView):
 
     Responses:
         200 OK → Comment object.
+        204 No Content → Successfully deleted.
         403 Forbidden → User not member of the board.
         404 Not Found → Task or comment not found.
     """
@@ -182,8 +190,17 @@ class CommentDetailDestroyView(generics.RetrieveDestroyAPIView):
         except Task.DoesNotExist:
             raise NotFound("Task not found.")
 
+    def _enforce_membership(self, task):
+        board = task.board
+        user = self.request.user
+        if not (board.owner_id == user.id or board.members.filter(id=user.id).exists()):
+            raise PermissionDenied(
+                "You must be a member of the board to manage comments for this task."
+            )
+
     def get_queryset(self):
         task = self._get_task_or_404()
+        self._enforce_membership(task)  # ensures 403 if user not a board member
         return Comment.objects.filter(task=task).select_related("author", "task", "task__board")
 
     def get_object(self):
@@ -192,6 +209,12 @@ class CommentDetailDestroyView(generics.RetrieveDestroyAPIView):
         except Comment.DoesNotExist:
             raise NotFound("Comment not found.")
         return comment
+
+    def perform_destroy(self, instance):
+        # extra safeguard: double-check membership before deletion
+        self._enforce_membership(instance.task)
+        super().perform_destroy(instance)
+
 
 
 class TaskReviewingListView(generics.ListAPIView):
